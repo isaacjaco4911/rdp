@@ -1,11 +1,13 @@
 #!/bin/bash
 
 # =============================================================================
-# Script de Configuración VNC para Ubuntu Server
-# Convierte XRDP a VNC con XFCE4 optimizado
+# Script AUTOMÁTICO de Configuración VNC para Ubuntu Server
+# Convierte XRDP a VNC con XFCE4 optimizado - SIN INTERACCIÓN
 # =============================================================================
 
-echo "🚀 Iniciando configuración de VNC..."
+set -e  # Salir si hay algún error
+
+echo "🚀 Iniciando configuración AUTOMÁTICA de VNC..."
 
 # Colores para output
 RED='\033[0;31m'
@@ -13,6 +15,12 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+
+# Configuraciones por defecto (EDITABLE)
+VNC_PASSWORD="123456789"  # Cambiar por tu contraseña preferida
+VNC_GEOMETRY="1920x1080"
+VNC_DEPTH="24"
+VNC_DISPLAY=":1"
 
 # Función para imprimir con colores
 print_status() {
@@ -31,6 +39,14 @@ print_error() {
     echo -e "${RED}❌ $1${NC}"
 }
 
+# Función para manejar errores
+handle_error() {
+    print_error "Error en línea $1. Saliendo..."
+    exit 1
+}
+
+trap 'handle_error $LINENO' ERR
+
 # =============================================================================
 # 1. LIMPIEZA INICIAL Y REMOCIÓN DE XRDP
 # =============================================================================
@@ -38,19 +54,27 @@ print_error() {
 echo -e "${BLUE}🧹 Paso 1: Limpieza inicial${NC}"
 
 # Remover XRDP si existe
-if systemctl is-active --quiet xrdp; then
+if systemctl is-active --quiet xrdp 2>/dev/null; then
     print_warning "Deteniendo y removiendo XRDP..."
-    sudo systemctl stop xrdp
-    sudo systemctl disable xrdp
-    sudo apt remove xrdp -y
-    sudo apt autoremove -y
+    sudo systemctl stop xrdp 2>/dev/null || true
+    sudo systemctl disable xrdp 2>/dev/null || true
+    sudo apt remove xrdp -y 2>/dev/null || true
+    sudo apt autoremove -y 2>/dev/null || true
 fi
 
-# Limpiar procesos VNC existentes
+# Limpiar procesos VNC de forma más segura
 print_info "Limpiando procesos VNC existentes..."
-sudo pkill -f vnc 2>/dev/null || true
-sudo pkill -f Xvnc 2>/dev/null || true
-sudo pkill -f Xtightvnc 2>/dev/null || true
+pgrep -f "vnc" | while read pid; do
+    if [ "$pid" != "$$" ]; then
+        sudo kill -9 "$pid" 2>/dev/null || true
+    fi
+done
+
+pgrep -f "Xvnc" | while read pid; do
+    if [ "$pid" != "$$" ]; then
+        sudo kill -9 "$pid" 2>/dev/null || true
+    fi
+done
 
 # Limpiar archivos de configuración antiguos
 rm -rf ~/.vnc/*.log ~/.vnc/*.pid ~/.vnc/passwd 2>/dev/null || true
@@ -64,10 +88,10 @@ print_status "Limpieza completada"
 echo -e "${BLUE}📦 Paso 2: Instalación de paquetes${NC}"
 
 print_info "Actualizando repositorios..."
-sudo apt update
+sudo apt update -y
 
 print_info "Instalando componentes base..."
-sudo apt install -y \
+sudo DEBIAN_FRONTEND=noninteractive apt install -y \
     xfce4 \
     xfce4-goodies \
     xfce4-session \
@@ -80,9 +104,10 @@ sudo apt install -y \
     dbus \
     dbus-x11 \
     at-spi2-core \
-    x11-xserver-utils
+    x11-xserver-utils \
+    expect
 
-# Remover TightVNC si existe
+# Remover TightVNC si existe (sin error si no existe)
 sudo apt remove tightvncserver -y 2>/dev/null || true
 sudo apt autoremove -y
 
@@ -125,9 +150,9 @@ EOF
 chmod +x ~/.vnc/xstartup
 
 print_info "Creando archivo de configuración VNC..."
-cat > ~/.vnc/config << 'EOF'
-geometry=1920x1080
-depth=24
+cat > ~/.vnc/config << EOF
+geometry=${VNC_GEOMETRY}
+depth=${VNC_DEPTH}
 localhost=no
 pixelformat=rgb888
 dpi=96
@@ -143,23 +168,34 @@ echo -e "${BLUE}🔥 Paso 4: Configuración de firewall${NC}"
 
 print_info "Configurando UFW..."
 sudo ufw allow 5901/tcp
-sudo ufw --force enable
+echo "y" | sudo ufw --force enable
 
 print_info "Configurando iptables..."
-sudo iptables -A INPUT -p tcp --dport 5901 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 5901 -j ACCEPT 2>/dev/null || true
 
 print_status "Firewall configurado para puerto 5901"
 
 # =============================================================================
-# 5. CONFIGURACIÓN DE CONTRASEÑA
+# 5. CONFIGURACIÓN AUTOMÁTICA DE CONTRASEÑA
 # =============================================================================
 
-echo -e "${BLUE}🔐 Paso 5: Configuración de contraseña VNC${NC}"
+echo -e "${BLUE}🔐 Paso 5: Configuración automática de contraseña VNC${NC}"
 
-print_warning "Configura tu contraseña VNC (6-8 caracteres):"
-vncpasswd
+print_info "Configurando contraseña VNC automáticamente..."
 
-print_status "Contraseña configurada"
+# Usar expect para automatizar vncpasswd
+expect << EOF
+spawn vncpasswd
+expect "Password:"
+send "${VNC_PASSWORD}\r"
+expect "Verify:"
+send "${VNC_PASSWORD}\r"
+expect "Would you like to enter a view-only password (y/n)?"
+send "n\r"
+expect eof
+EOF
+
+print_status "Contraseña VNC configurada automáticamente"
 
 # =============================================================================
 # 6. INICIO DEL SERVIDOR VNC
@@ -167,18 +203,32 @@ print_status "Contraseña configurada"
 
 echo -e "${BLUE}🚀 Paso 6: Iniciando servidor VNC${NC}"
 
-print_info "Iniciando VNC en display :1..."
-vncserver :1
+print_info "Iniciando VNC en display ${VNC_DISPLAY}..."
+
+# Asegurar que no hay VNC corriendo en el display
+vncserver -kill ${VNC_DISPLAY} 2>/dev/null || true
+
+# Iniciar VNC con configuración optimizada
+vncserver ${VNC_DISPLAY} -geometry ${VNC_GEOMETRY} -depth ${VNC_DEPTH} -localhost no
+
+# Esperar a que inicie
+sleep 5
 
 # Verificar que esté corriendo
-sleep 3
-
 if vncserver -list | grep -q "5901"; then
     print_status "Servidor VNC iniciado correctamente"
 else
-    print_error "Error al iniciar VNC. Revisando logs..."
-    cat ~/.vnc/*.log | tail -10
-    exit 1
+    print_error "Error al iniciar VNC. Intentando de nuevo..."
+    sleep 3
+    vncserver ${VNC_DISPLAY} -localhost no
+    sleep 3
+    if vncserver -list | grep -q "5901"; then
+        print_status "Servidor VNC iniciado en segundo intento"
+    else
+        print_error "Fallo crítico al iniciar VNC. Logs:"
+        cat ~/.vnc/*.log | tail -10
+        exit 1
+    fi
 fi
 
 # =============================================================================
@@ -189,61 +239,38 @@ echo -e "${BLUE}🔍 Paso 7: Verificaciones finales${NC}"
 
 # Verificar puerto
 print_info "Verificando puerto 5901..."
+sleep 2
+
 if ss -tlnp | grep -q "0.0.0.0:5901"; then
-    print_status "Puerto 5901 escuchando en todas las interfaces"
+    print_status "Puerto 5901 escuchando en todas las interfaces ✓"
 elif ss -tlnp | grep -q "127.0.0.1:5901"; then
-    print_error "⚠️ Puerto solo escuchando en localhost. Reiniciando..."
-    vncserver -kill :1
-    vncserver :1
+    print_warning "Puerto solo en localhost. Corrigiendo..."
+    vncserver -kill ${VNC_DISPLAY}
     sleep 2
+    vncserver ${VNC_DISPLAY} -localhost no
+    sleep 3
     if ss -tlnp | grep -q "0.0.0.0:5901"; then
-        print_status "Puerto corregido - ahora escucha en todas las interfaces"
+        print_status "Puerto corregido - ahora escucha en todas las interfaces ✓"
+    else
+        print_error "No se pudo corregir el puerto"
     fi
 else
     print_error "Puerto 5901 no encontrado"
 fi
 
 # Obtener IP del servidor
-SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}')
+print_info "Obteniendo IP pública del servidor..."
+SERVER_IP=$(curl -s --max-time 10 ifconfig.me 2>/dev/null || curl -s --max-time 10 icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}')
 
 # =============================================================================
-# 8. INFORMACIÓN FINAL
+# 8. CREAR SERVICIO SYSTEMD AUTOMÁTICAMENTE
 # =============================================================================
 
-echo ""
-echo -e "${GREEN}🎉 ¡Configuración de VNC completada exitosamente!${NC}"
-echo ""
-echo -e "${BLUE}📋 INFORMACIÓN DE CONEXIÓN:${NC}"
-echo -e "   ${YELLOW}Dirección:${NC} $SERVER_IP:5901"
-echo -e "   ${YELLOW}Puerto:${NC} 5901"
-echo -e "   ${YELLOW}Display:${NC} :1"
-echo -e "   ${YELLOW}Contraseña:${NC} La que configuraste con vncpasswd"
-echo ""
-echo -e "${BLUE}🔧 COMANDOS ÚTILES:${NC}"
-echo -e "   ${YELLOW}Ver servidores VNC:${NC} vncserver -list"
-echo -e "   ${YELLOW}Parar VNC:${NC} vncserver -kill :1"
-echo -e "   ${YELLOW}Iniciar VNC:${NC} vncserver :1"
-echo -e "   ${YELLOW}Ver logs:${NC} cat ~/.vnc/*.log"
-echo -e "   ${YELLOW}Cambiar contraseña:${NC} vncpasswd"
-echo ""
-echo -e "${BLUE}☁️  CONFIGURACIÓN EN AZURE:${NC}"
-echo -e "   ${YELLOW}1.${NC} Ve al portal de Azure"
-echo -e "   ${YELLOW}2.${NC} Selecciona tu VM"
-echo -e "   ${YELLOW}3.${NC} Ve a 'Networking' → 'Add inbound port rule'"
-echo -e "   ${YELLOW}4.${NC} Puerto: 5901, Protocolo: TCP, Origen: Any"
-echo ""
-echo -e "${GREEN}✨ ¡Disfruta tu escritorio remoto VNC!${NC}"
+echo -e "${BLUE}🔧 Paso 8: Creando servicio systemd${NC}"
 
-# =============================================================================
-# OPCIONAL: CREAR SERVICIO SYSTEMD
-# =============================================================================
+print_info "Creando servicio systemd para auto-inicio..."
 
-read -p "¿Quieres crear un servicio systemd para auto-iniciar VNC? (y/n): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    print_info "Creando servicio systemd..."
-    
-    sudo tee /etc/systemd/system/vncserver@.service > /dev/null << EOF
+sudo tee /etc/systemd/system/vncserver@.service > /dev/null << EOF
 [Unit]
 Description=Start TigerVNC server at startup
 After=syslog.target network.target
@@ -256,18 +283,95 @@ WorkingDirectory=$HOME
 
 PIDFile=$HOME/.vnc/%H:%i.pid
 ExecStartPre=-/usr/bin/vncserver -kill :%i > /dev/null 2>&1
-ExecStart=/usr/bin/vncserver -depth 24 -geometry 1920x1080 -localhost no :%i
+ExecStart=/usr/bin/vncserver -depth ${VNC_DEPTH} -geometry ${VNC_GEOMETRY} -localhost no :%i
 ExecStop=/usr/bin/vncserver -kill :%i
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    sudo systemctl daemon-reload
-    sudo systemctl enable vncserver@1.service
-    
-    print_status "Servicio systemd creado. VNC se iniciará automáticamente al reiniciar"
-fi
+sudo systemctl daemon-reload
+sudo systemctl enable vncserver@1.service
+
+print_status "Servicio systemd creado y habilitado"
+
+# =============================================================================
+# 9. SCRIPT DE ADMINISTRACIÓN
+# =============================================================================
+
+echo -e "${BLUE}📝 Paso 9: Creando script de administración${NC}"
+
+cat > ~/vnc-admin.sh << 'EOF'
+#!/bin/bash
+
+# Script de administración VNC
+
+case $1 in
+    start)
+        echo "🚀 Iniciando VNC..."
+        vncserver :1
+        ;;
+    stop)
+        echo "🛑 Deteniendo VNC..."
+        vncserver -kill :1
+        ;;
+    restart)
+        echo "🔄 Reiniciando VNC..."
+        vncserver -kill :1
+        sleep 2
+        vncserver :1
+        ;;
+    status)
+        echo "📊 Estado de VNC:"
+        vncserver -list
+        ss -tlnp | grep 5901
+        ;;
+    logs)
+        echo "📋 Logs de VNC:"
+        cat ~/.vnc/*.log | tail -20
+        ;;
+    password)
+        echo "🔐 Cambiando contraseña..."
+        vncpasswd
+        ;;
+    *)
+        echo "Uso: $0 {start|stop|restart|status|logs|password}"
+        exit 1
+        ;;
+esac
+EOF
+
+chmod +x ~/vnc-admin.sh
+
+print_status "Script de administración creado: ~/vnc-admin.sh"
+
+# =============================================================================
+# 10. INFORMACIÓN FINAL
+# =============================================================================
 
 echo ""
-print_status "Script completado. ¡Todo listo para usar VNC!"
+echo -e "${GREEN}🎉 ¡Configuración de VNC completada exitosamente!${NC}"
+echo ""
+echo -e "${BLUE}📋 INFORMACIÓN DE CONEXIÓN:${NC}"
+echo -e "   ${YELLOW}Dirección:${NC} $SERVER_IP:5901"
+echo -e "   ${YELLOW}Puerto:${NC} 5901"
+echo -e "   ${YELLOW}Display:${NC} :1"
+echo -e "   ${YELLOW}Contraseña:${NC} $VNC_PASSWORD"
+echo ""
+echo -e "${BLUE}🔧 COMANDOS ÚTILES:${NC}"
+echo -e "   ${YELLOW}Administrar VNC:${NC} ~/vnc-admin.sh {start|stop|restart|status|logs|password}"
+echo -e "   ${YELLOW}Ver servidores VNC:${NC} vncserver -list"
+echo -e "   ${YELLOW}Ver logs:${NC} cat ~/.vnc/*.log"
+echo ""
+echo -e "${BLUE}☁️  CONFIGURACIÓN EN AZURE:${NC}"
+echo -e "   ${YELLOW}1.${NC} Ve al portal de Azure"
+echo -e "   ${YELLOW}2.${NC} Selecciona tu VM → Networking"
+echo -e "   ${YELLOW}3.${NC} Add inbound port rule → Puerto: 5901, TCP, Any"
+echo ""
+echo -e "${BLUE}🎯 ESTADO ACTUAL:${NC}"
+vncserver -list
+echo ""
+ss -tlnp | grep 5901 || echo "Puerto no detectado"
+echo ""
+echo -e "${GREEN}✨ ¡VNC configurado y listo para usar!${NC}"
+echo -e "${GREEN}🔄 VNC se iniciará automáticamente al reiniciar el servidor${NC}"
