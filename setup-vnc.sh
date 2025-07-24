@@ -3,9 +3,8 @@
 # =============================================================================
 # Script AUTOMÁTICO de Configuración VNC para Ubuntu Server
 # Convierte XRDP a VNC con XFCE4 optimizado - SIN INTERACCIÓN
+# Versión: 2.0 - Completamente automático
 # =============================================================================
-
-set -e  # Salir si hay algún error
 
 echo "🚀 Iniciando configuración AUTOMÁTICA de VNC..."
 
@@ -41,11 +40,12 @@ print_error() {
 
 # Función para manejar errores
 handle_error() {
-    print_error "Error en línea $1. Saliendo..."
-    exit 1
+    print_error "Error en línea $1. Continuando..."
+    # No salir, solo continuar
 }
 
 trap 'handle_error $LINENO' ERR
+set +e  # No salir en errores, solo reportar
 
 # =============================================================================
 # 1. LIMPIEZA INICIAL Y REMOCIÓN DE XRDP
@@ -64,17 +64,9 @@ fi
 
 # Limpiar procesos VNC de forma más segura
 print_info "Limpiando procesos VNC existentes..."
-pgrep -f "vnc" | while read pid; do
-    if [ "$pid" != "$$" ]; then
-        sudo kill -9 "$pid" 2>/dev/null || true
-    fi
-done
-
-pgrep -f "Xvnc" | while read pid; do
-    if [ "$pid" != "$$" ]; then
-        sudo kill -9 "$pid" 2>/dev/null || true
-    fi
-done
+sudo pkill -f "vnc" 2>/dev/null || true
+sudo pkill -f "Xvnc" 2>/dev/null || true
+sudo pkill -f "tigervnc" 2>/dev/null || true
 
 # Limpiar archivos de configuración antiguos
 rm -rf ~/.vnc/*.log ~/.vnc/*.pid ~/.vnc/passwd 2>/dev/null || true
@@ -168,7 +160,7 @@ echo -e "${BLUE}🔥 Paso 4: Configuración de firewall${NC}"
 
 print_info "Configurando UFW..."
 sudo ufw allow 5901/tcp
-echo "y" | sudo ufw --force enable
+echo "y" | sudo ufw --force enable 2>/dev/null || sudo ufw --force enable 
 
 print_info "Configurando iptables..."
 sudo iptables -A INPUT -p tcp --dport 5901 -j ACCEPT 2>/dev/null || true
